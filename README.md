@@ -1,91 +1,259 @@
-DevOps Practice Project – Dist Directory
+# Trendify — Production Deployment
 
-This repository contains the production-ready build files (dist folder) for DevOps practice and deployment exercises.
+A React e-commerce application deployed to AWS EKS using Terraform, Jenkins CI/CD, DockerHub, and Prometheus/Grafana monitoring.
 
-It is intentionally structured to help learners focus on CI/CD pipelines, hosting, containerization, and infrastructure setup rather than application development.
+## Architecture Overview
 
-📁 What This Repository Contains
+```
+GitHub Repo → Jenkins (GitHub Webhook) → DockerHub → EKS (Kubernetes)
+                                                          ↓
+                                                LoadBalancer (port 80)
+                                                          ↓
+                                                Nginx container (port 3000)
 
-dist/ – Compiled and production-ready static files
+Monitoring: Prometheus + Grafana (in-cluster)
+Infrastructure: Terraform (VPC, IAM, EC2, EKS)
+```
 
-HTML
+## Project Structure
 
-CSS
+```
+Trend/
+├── dist/                              # Production-ready React build
+│   ├── index.html
+│   └── assets/
+├── k8s/
+│   ├── deployment.yaml                # Kubernetes Deployment (2 replicas)
+│   └── service.yaml                   # Kubernetes Service (LoadBalancer)
+├── terraform/
+│   ├── provider.tf                    # AWS provider configuration
+│   ├── variables.tf                   # Input variables
+│   ├── vpc.tf                         # VPC, subnets, NAT gateway
+│   ├── iam.tf                         # IAM roles (EKS, nodes, Jenkins)
+│   ├── security-groups.tf             # Security groups
+│   ├── jenkins-ec2.tf                 # Jenkins EC2 instance with user data
+│   ├── eks.tf                         # EKS cluster and node group
+│   └── outputs.tf                     # Output values
+├── monitoring/
+│   ├── prometheus-config.yaml         # Prometheus deployment + config
+│   └── grafana.yaml                   # Grafana deployment + datasource
+├── Dockerfile                         # Nginx container serving React app
+├── nginx.conf                         # Nginx config (port 3000, SPA routing)
+├── Jenkinsfile                        # Declarative pipeline
+├── .dockerignore
+├── .gitignore
+└── README.md
+```
 
-JavaScript
+## Prerequisites
 
-Assets (images, fonts, etc.)
+- AWS CLI v2 configured with credentials
+- Terraform installed (v1.0+)
+- Docker installed locally
+- kubectl installed
+- Git
 
-These files are ready to deploy to:
+## Setup Instructions
 
-Web servers (Nginx / Apache)
+### Step 1: Create SSH Key Pair for Jenkins EC2
 
-Cloud platforms (AWS S3, Azure Blob, GCP Storage)
+```bash
+aws ec2 create-key-pair \
+  --key-name trend-jenkins-key \
+  --query 'KeyMaterial' \
+  --output text \
+  --region ap-south-1 > trend-jenkins-key.pem
 
-Containerized environments (Docker + Nginx)
+chmod 400 trend-jenkins-key.pem
+```
 
-Kubernetes clusters
+### Step 2: Provision Infrastructure with Terraform
 
-CI/CD pipeline demonstrations
+```bash
+cd terraform
 
-🎯 Purpose of This Repository
+terraform init
+terraform plan
+terraform apply -auto-approve
+```
 
-This repository is designed for:
+This creates:
+- VPC with public/private subnets, NAT gateway
+- IAM roles for EKS cluster, node group, and Jenkins
+- EC2 instance with Jenkins, Docker, kubectl, AWS CLI pre-installed
+- EKS cluster with managed node group (2x t3.medium)
 
-DevOps beginners
+Save the outputs (Jenkins IP, EKS endpoint).
 
-CI/CD practice
+### Step 3: Create DockerHub Repository
 
-Deployment pipeline testing
+1. Log in to [DockerHub](https://hub.docker.com)
+2. Create repository: `lakshmiparamesh/trend-app`
 
-Docker & Kubernetes deployment exercises
+### Step 4: Build & Test Docker Image Locally
 
-Web server configuration practice
+```bash
+docker build -t trend-app .
+docker run -p 3000:3000 trend-app
+# Visit http://localhost:3000
+```
 
-Reverse proxy and load balancer setup
+### Step 5: Push Docker Image to DockerHub
 
-The goal is to simulate real-world deployment scenarios using already built application files.
+```bash
+docker login -u lakshmiparamesh
+docker tag trend-app:latest lakshmiparamesh/trend-app:latest
+docker push lakshmiparamesh/trend-app:latest
+```
 
-❓ Why is there NO package.json?
+### Step 6: Configure kubectl for EKS
 
-You may notice that this repository does not include:
+```bash
+aws eks update-kubeconfig --name trend-cluster --region ap-south-1
+kubectl get nodes
+```
 
-package.json
+### Step 7: Deploy to EKS
 
-node_modules
+```bash
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
 
-Source code (src/)
+kubectl get deployments
+kubectl get pods
+kubectl get svc trend-app-service
+```
 
-Build tools configuration
+### Step 8: Setup Jenkins
 
-✅ Reason:
+1. SSH into Jenkins EC2:
+   ```bash
+   ssh -i trend-jenkins-key.pem ubuntu@<JENKINS_PUBLIC_IP>
+   ```
 
-This repository only contains the final production build output (dist), not the development source code.
+2. Get Jenkins initial admin password:
+   ```bash
+   sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+   ```
 
-In a typical project:
+3. Open Jenkins UI: `http://<JENKINS_PUBLIC_IP>:8080`
 
-Developers write source code.
+4. Install suggested plugins + additional:
+   - Docker Pipeline
+   - Pipeline
+   - Git
+   - GitHub Integration
+   - Kubernetes CLI
 
-The project is built using tools like:
+5. Add DockerHub credentials:
+   - Go to Manage Jenkins → Credentials
+   - Add credentials (Username/Password)
+   - ID: `dockerhub-credentials`
+   - Username: `lakshmiparamesh`
+   - Password: DockerHub password/token
 
-Node.js
+6. Configure AWS credentials on Jenkins EC2:
+   ```bash
+   sudo -u jenkins aws configure
+   # Enter AWS Access Key, Secret Key, region: ap-south-1
+   ```
 
-Webpack
+7. Grant Jenkins EKS access:
+   ```bash
+   # On your local machine
+   kubectl edit configmap aws-auth -n kube-system
+   ```
+   Add under `mapRoles`:
+   ```yaml
+   - rolearn: arn:aws:iam::009075573616:role/trend-jenkins-role
+     username: jenkins
+     groups:
+       - system:masters
+   ```
 
-Vite
+### Step 9: Create Jenkins Pipeline
 
-React (or other frameworks)
+1. New Item → Pipeline
+2. Name: `trend-app-pipeline`
+3. Pipeline Definition: Pipeline script from SCM
+4. SCM: Git
+5. Repository URL: `https://github.com/Lakshmiparamesh/Trend.git`
+6. Branch: `*/main`
+7. Script Path: `Jenkinsfile`
 
-A dist/ folder is generated.
+### Step 10: Configure GitHub Webhook
 
-Only the production build is deployed to servers.
+1. Go to GitHub repo → Settings → Webhooks → Add webhook
+2. Payload URL: `http://<JENKINS_PUBLIC_IP>:8080/github-webhook/`
+3. Content type: `application/json`
+4. Events: Just the push event
+5. Active: ✅
 
-This repository represents step 4 only.
+### Step 11: Deploy Monitoring (Prometheus + Grafana)
 
-Since this is already the compiled output:
+```bash
+kubectl apply -f monitoring/prometheus-config.yaml
+kubectl apply -f monitoring/grafana.yaml
 
-No dependencies are required
+# Get monitoring URLs
+kubectl get svc -n monitoring
+```
 
-No build process is required
+- **Prometheus**: `http://<PROMETHEUS_LB>:9090`
+- **Grafana**: `http://<GRAFANA_LB>:3000` (admin / admin123)
 
-No package.json is needed
+Add Kubernetes dashboard in Grafana:
+1. Go to Dashboards → Import
+2. Dashboard ID: `6417` (Kubernetes Cluster Monitoring)
+3. Data source: Prometheus
+
+## CI/CD Pipeline Flow
+
+```
+1. Developer pushes code to GitHub (main branch)
+2. GitHub webhook triggers Jenkins pipeline
+3. Jenkins:
+   a. Checks out source code
+   b. Builds Docker image
+   c. Pushes image to DockerHub
+   d. Updates kubeconfig for EKS
+   e. Applies Kubernetes manifests
+   f. Restarts deployment for latest image
+   g. Waits for rollout to complete
+4. Application is live on the LoadBalancer URL
+```
+
+## Monitoring
+
+- **Prometheus** — Collects metrics from Kubernetes nodes and pods
+- **Grafana** — Visualizes metrics with dashboards
+  - Default dashboard: Kubernetes Cluster Monitoring (ID 6417)
+  - Data source: Prometheus (auto-provisioned)
+
+```bash
+# View Prometheus targets
+http://<PROMETHEUS_LB>:9090/targets
+
+# View Grafana dashboards
+http://<GRAFANA_LB>:3000
+
+# View application logs
+kubectl logs -l app=trend-app --tail=100
+```
+
+## Key Details
+
+| Item                | Value                                            |
+|---------------------|--------------------------------------------------|
+| AWS Account ID      | 009075573616                                     |
+| Region              | ap-south-1 (Mumbai)                              |
+| DockerHub Image     | lakshmiparamesh/trend-app                        |
+| EKS Cluster         | trend-cluster (v1.31)                            |
+| App Port            | 3000 (container) → 80 (LoadBalancer)             |
+| Replicas            | 2                                                |
+| Node Type           | t3.medium                                        |
+| Jenkins Instance    | t3.medium (Ubuntu 22.04)                         |
+| Infrastructure      | Terraform                                        |
+| CI/CD               | Jenkins (declarative pipeline)                   |
+| Image Registry      | DockerHub                                        |
+| Monitoring          | Prometheus + Grafana                             |
