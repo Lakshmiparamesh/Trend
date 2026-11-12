@@ -241,11 +241,55 @@ http://<GRAFANA_LB>:3000
 kubectl logs -l app=trend-app --tail=100
 ```
 
+## Deployment Evidence
+
+### Live URLs
+
+| Service       | URL                                                                                          |
+|---------------|----------------------------------------------------------------------------------------------|
+| Application   | http://a2a3182ced88b4f229dba57e9dd89600-1160890347.ap-south-1.elb.amazonaws.com              |
+| Jenkins       | http://43.205.254.170:8080                                                                   |
+| Prometheus    | http://a7c8031aa29fd4885b7163ef3519a564-1049899950.ap-south-1.elb.amazonaws.com:9090         |
+| Grafana       | http://a5ddf1824bd99469e9c649395791ace9-2055109558.ap-south-1.elb.amazonaws.com:3000         |
+
+### EKS Cluster Status
+
+```
+Nodes:
+  ip-10-0-10-67   Ready   v1.31.14-eks-8418f54   (Amazon Linux 2023, t3.medium)
+  ip-10-0-11-123  Ready   v1.31.14-eks-8418f54   (Amazon Linux 2023, t3.medium)
+
+Pods:
+  trend-app-554555b6b6-wbmcx   1/1 Running   (node: ip-10-0-11-123)
+  trend-app-554555b6b6-zgdz2   1/1 Running   (node: ip-10-0-10-67)
+
+Services:
+  trend-app-service   LoadBalancer   80:30851/TCP
+  prometheus-service  LoadBalancer   9090:32760/TCP
+  grafana-service     LoadBalancer   3000:31149/TCP
+```
+
+### Jenkins Pipeline
+
+- Job: `trend-app-pipeline`
+- Build #1: SUCCESS
+- Pipeline: Checkout → Docker Build → Push to DockerHub → Update Kubeconfig → Deploy to EKS
+- Trigger: GitHub webhook (push events on main branch)
+
+### Terraform Resources (29 total)
+
+- VPC: `vpc-0cb017a638149983a` (10.0.0.0/16)
+- 2 public subnets + 2 private subnets
+- NAT Gateway, Internet Gateway
+- EKS Cluster: `trend-cluster`
+- EKS Node Group: 2x t3.medium
+- Jenkins EC2: `i-0aa195d125a2fbb50` (t3.medium)
+- IAM Roles: eks-cluster, eks-nodes, jenkins
+
 ## Key Details
 
 | Item                | Value                                            |
 |---------------------|--------------------------------------------------|
-| AWS Account ID      | 009075573616                                     |
 | Region              | ap-south-1 (Mumbai)                              |
 | DockerHub Image     | lakshmiparamesh/trend-app                        |
 | EKS Cluster         | trend-cluster (v1.31)                            |
